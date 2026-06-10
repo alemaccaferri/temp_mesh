@@ -14,9 +14,15 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+
 import android.os.ParcelUuid
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+
 import android.content.Context
 import android.content.ContentValues
+
 import androidx.annotation.NonNull
 
 import io.flutter.embedding.android.FlutterActivity
@@ -29,8 +35,12 @@ import no.nordicsemi.android.mesh.MeshManagerApi
 import no.nordicsemi.android.mesh.MeshManagerCallbacks
 import no.nordicsemi.android.mesh.MeshNetwork
 
-import no.nordicsemi.android.mesh.provisionerstates.ProvisioningState
+import no.nordicsemi.android.mesh.provisioning.ProvisioningCapabilities
+import no.nordicsemi.android.mesh.provisioning.ProvisioningStatusCallbacks
+import no.nordicsemi.android.mesh.provisioning.UnprovisionedMeshNode
+
 import no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode
+import no.nordicsemi.android.mesh.provisionerstates.ProvisioningState
 
 import no.nordicsemi.android.mesh.transport.ProvisionedMeshNode
 import no.nordicsemi.android.mesh.transport.ControlMessage
@@ -39,8 +49,8 @@ import no.nordicsemi.android.mesh.transport.MeshMessage
 import no.nordicsemi.android.mesh.utils.MeshParserUtils 
 
 class MainActivity: FlutterActivity(), MeshManagerCallbacks, 
-    no.nordicsemi.android.mesh.MeshProvisioningStatusCallbacks, // <--- Verifica questo import esatto
-    no.nordicsemi.android.mesh.MeshStatusCallbacks  {
+    MeshProvisioningStatusCallbacks, 
+    MeshStatusCallbacks  {
 
     // Bluetooth scanner stuff ################################################
     private var bluetoothLeScanner: BluetoothLeScanner? = null
@@ -58,6 +68,9 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
     private val CHANNEL = "com.example.mesh/native"
     private val EVENT_CHANNEL = "com.example.mesh/events"
 
+    private var currentCapabilities: ProvisioningCapabilities? = null
+    private var currentDevice: UnprovisionedMeshNode? = null
+    
     // Dichiarazione della libreria Java
     private lateinit var meshManagerApi: MeshManagerApi
     private var eventSink: EventChannel.EventSink? = null // <--- Canale per trasmettere a Flutter
@@ -369,7 +382,7 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
             runOnUiThread { eventSink?.success(eventData) }
         }
     }
-
+    
     override fun onNetworkImportFailed(error: String?) {
         // Chiamato se l'importazione del JSON fallisce
         val eventData = HashMap<String, Any>()
@@ -379,9 +392,72 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
         
         runOnUiThread { eventSink?.success(eventData) }
     }
+    
+    override fun sendProvisioningPdu(meshNode: UnprovisionedMeshNode, pdu: ByteArray) {
+        // Chiamato quando la libreria deve inviare pacchetti durante il provisioning BLE
+        val eventData = HashMap<String, Any>()
+        eventData["type"] = "provisioning_pdu"
+        eventData["state"] = "pdu size: ${pdu.size}"
+        println("_DBG_KT sendProvisioningPdu() pdu.size: ${pdu.size}")
 
-    // overrides per il PROVISIONING ===================================================
+        runOnUiThread { 
+            eventSink?.success(eventData)
+        }
 
+        // Aggiungiamo un controllo di sicurezza per essere sicuri che la variabile sia pronta
+        if (::meshGattManager.isInitialized) {
+            // Eseguiamo la scrittura sul thread corretto per evitare blocchi asincroni
+            runOnUiThread {
+                println("_DBG_KT Forzo l'invio della PDU al MeshGattManager...")
+                meshGattManager.sendMeshPdu(pdu)
+            }
+        } else {
+            println("_DBG_KT ERRORE CRITICO: meshGattManager non è ancora inizializzato!")
+        }
+    }
+
+    override fun onMeshPduCreated(pdu: ByteArray) {
+        // Chiamato quando viene generato un pacchetto Mesh pronto da trasmettere
+    }
+
+     override fun getMtu(): Int {
+        return if (::meshGattManager.isInitialized) {
+            var mtu = meshGattManager.getNegotiatedMtu()
+            // mtu=69
+            println("_DBG_KT getMtu() mtu: ${mtu}")
+            return mtu
+        } else {
+            println("_DBG_KT getMtu() mtu: 23")
+            return 23
+        }
+    }
+
+    // =========================================================================
+    // OVERRIDE DEI METODI OBBLIGATORI DI MeshStatusCallbacks
+    // =========================================================================
+    
+    override fun onTransactionFailed(dst: Int, hasIncompleteTimerExpired: Boolean) {}
+    
+    override fun onUnknownPduReceived(src: Int, accessPayload: ByteArray?) {}
+    
+    override fun onBlockAcknowledgementProcessed(dst: Int, message: ControlMessage) {}
+    
+    override fun onBlockAcknowledgementReceived(src: Int, message: ControlMessage) {}
+    
+    override fun onHeartbeatMessageReceived(src: Int, message: ControlMessage) {}
+    override fun onMeshMessageProcessed(dst: Int, meshMessage: no.nordicsemi.android.mesh.transport.MeshMessage) {}
+    override fun onMeshMessageReceived(src: Int, meshMessage: no.nordicsemi.android.mesh.transport.MeshMessage) {}
+
+    override fun onMessageDecryptionFailed(meshLayer: String, errorMessage: String) {
+        // Puoi lasciarlo vuoto o inserire un log di debug se la decrittazione fallisce
+    }
+
+
+
+    // =========================================================================
+    // OVERRIDE DEI METODI OBBLIGATORI DI MeshProvisioningStatusCallbacks
+    // =========================================================================
+  
     override fun onProvisioningStateChanged(
         meshNode: UnprovisionedMeshNode,
         state: ProvisioningState.States,
@@ -456,93 +532,8 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
         
         runOnUiThread { eventSink?.success(eventData) }
     }
-
-
-    override fun sendProvisioningPdu(meshNode: UnprovisionedMeshNode, pdu: ByteArray) {
-        // Chiamato quando la libreria deve inviare pacchetti durante il provisioning BLE
-        val eventData = HashMap<String, Any>()
-        eventData["type"] = "provisioning_pdu"
-        eventData["state"] = "pdu size: ${pdu.size}"
-        println("_DBG_KT sendProvisioningPdu() pdu.size: ${pdu.size}")
-
-        runOnUiThread { 
-            eventSink?.success(eventData)
-        }
-
-        // Aggiungiamo un controllo di sicurezza per essere sicuri che la variabile sia pronta
-        if (::meshGattManager.isInitialized) {
-            // Eseguiamo la scrittura sul thread corretto per evitare blocchi asincroni
-            runOnUiThread {
-                println("_DBG_KT Forzo l'invio della PDU al MeshGattManager...")
-                meshGattManager.sendMeshPdu(pdu)
-            }
-        } else {
-            println("_DBG_KT ERRORE CRITICO: meshGattManager non è ancora inizializzato!")
-        }
-    }
-
-    
-    // // Alcune versioni usano l'oggetto encapsulato "ProvisioningCapabilities"
-    // fun onProvisioningCapabilitiesReceived(
-    //     meshNode: UnprovisionedMeshNode,
-    //     capabilities: no.nordicsemi.android.mesh.provisionerstates.ProvisioningCapabilities
-    // ) {
-    //     println("_DBG_KT RICEVUTE CAPABILITIES (Firma Oggetto)!")
-    //     val elements = capabilities.numberOfElements?.toInt() ?: 1
-    //     gestisciAvvioProvisioningFinale(meshNode, elements)
-    // }
-    
-    // /**
-    //  * Funzione centralizzata per calcolare l'indirizzo e sbloccare lo Start
-    //  */
-    // private fun gestisciAvvioProvisioningFinale(meshNode: UnprovisionedMeshNode, numberOfElements: Int) {
-    //     val network = meshManagerApi.meshNetwork
-    //     if (network != null) {
-    //         val provisioner = network.selectedProvisioner
-    //         if (provisioner != null) {
-    //             val nextAddress = network.nextAvailableUnicastAddress(numberOfElements, provisioner)
-    //             meshNode.unicastAddress = nextAddress
-    //             println("_DBG_KT Indirizzo Unicast calcolato e assegnato: $nextAddress")
-    //         }
-    //     }
-
-    //     try {
-    //         // Questo comando invia fisicamente il pacchetto PROVISIONING_START (fase successiva!)
-    //         meshManagerApi.startProvisioning(meshNode)
-    //         println("_DBG_KT Inviato comando startProvisioning finale all'hardware.")
-    //     } catch (e: Exception) {
-    //         println("_DBG_KT Errore durante startProvisioning: ${e.message}")
-    //     }
-    // }
-
-    // ============================================================================================================
-
-    override fun onMeshPduCreated(pdu: ByteArray) {
-        // Chiamato quando viene generato un pacchetto Mesh pronto da trasmettere
-    }
-
-    override fun getMtu(): Int {
-        return if (::meshGattManager.isInitialized) {
-            var mtu = meshGattManager.getNegotiatedMtu()
-            // mtu=69
-            println("_DBG_KT getMtu() mtu: ${mtu}")
-            return mtu
-        } else {
-            println("_DBG_KT getMtu() mtu: 23")
-            return 23
-        }
-    }
-    
-    override fun onTransactionFailed(dst: Int, hasIncompleteTimerExpired: Boolean) {}
-    override fun onUnknownPduReceived(src: Int, accessPayload: ByteArray?) {}
-    override fun onBlockAcknowledgementProcessed(dst: Int, message: ControlMessage) {}
-    override fun onBlockAcknowledgementReceived(src: Int, message: ControlMessage) {}
-    override fun onHeartbeatMessageReceived(src: Int, message: ControlMessage) {}
-    override fun onMeshMessageProcessed(dst: Int, meshMessage: no.nordicsemi.android.mesh.transport.MeshMessage) {}
-    override fun onMeshMessageReceived(src: Int, meshMessage: no.nordicsemi.android.mesh.transport.MeshMessage) {}
-    override fun onMessageDecryptionFailed(meshLayer: String, errorMessage: String) {
-        // Puoi lasciarlo vuoto o inserire un log di debug se la decrittazione fallisce
-    }
+   
+      
 
     // SCAN  ======================================================================================================
 
@@ -640,6 +631,8 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
         }
     }
     
+    // ======================================================================================================
+
 
     private fun meshNetworkToMap(network: MeshNetwork): HashMap<String, Any> {
         //if (network == null) return null
