@@ -10,11 +10,10 @@ class ScanPage extends StatefulWidget {
 }
 
 class _ScanPageState extends State<ScanPage> {
-  static const platform = MethodChannel('com.example.mesh/native');
-  // Canale eventi corrispondente a quello nativo
-  static const EventChannel _eventChannel = EventChannel(
-    'com.example.mesh/events',
-  );
+
+  static const MethodChannel methodChannel = MethodChannel('com.example.mesh/native');
+   
+  static const EventChannel eventChannel = EventChannel('com.example.mesh/events');
 
   // Sottoscrizione per poter chiudere il canale quando la pagina viene distrutta
   StreamSubscription? _meshSubscription;
@@ -33,44 +32,42 @@ class _ScanPageState extends State<ScanPage> {
       _scanStatus="Scanning...";
     });
 
-    await platform.invokeMethod('startScan');
+    await methodChannel.invokeMethod('startScan');
   }
 
   Future<void> fermaScansione() async {
-    await platform.invokeMethod('stopScan');
+    await methodChannel.invokeMethod('stopScan');
     setState(() {
       _scanStatus="Stopped.";
     });
   }
  
+  Future<void> eseguiFlussoProvisioning(String uuid, String mac) async {
+  
+    await fermaScansione();
 
- Future<void> eseguiFlussoProvisioning(String uuid, String mac) async {
-  await fermaScansione();
+    setState(() {
+      _statusMessage = "Connessione radio in corso a:\n$mac";
+    });
 
-  setState(() {
-    _statusMessage = "Connessione radio in corso a:\n$mac";
-  });
+    // Avviamo SOLO la connessione GATT.
+    // Salviamo temporaneamente UUID e MAC nelle variabili di stato della pagina
+    // per usarle non appena il canale nativo ci darà il via libera.
+    _currentProvisioningUuid = uuid;
+    _currentProvisioningMac = mac;
 
-  // Avviamo SOLO la connessione GATT.
-  // Salviamo temporaneamente UUID e MAC nelle variabili di stato della pagina
-  // per usarle non appena il canale nativo ci darà il via libera.
-  _currentProvisioningUuid = uuid;
-  _currentProvisioningMac = mac;
-
-  await platform.invokeMethod<String>(
-    'connectToMeshNode',
-    {'macAddress': mac},
-  );
-}
-
-
+    await methodChannel.invokeMethod<String>(
+      'connectToMeshNode',
+      {'macAddress': mac},
+    );
+  }
 
 
   @override
   void initState() {
     super.initState();
 
-    _meshSubscription = _eventChannel.receiveBroadcastStream().listen(
+    _meshSubscription = eventChannel.receiveBroadcastStream().listen(
       (dynamic evento) {
         if (evento is Map) {
 
@@ -100,6 +97,8 @@ class _ScanPageState extends State<ScanPage> {
         }
         else if (evento is String) {
           _aggiornaStatoDallaStringaNativa(evento);
+        } else {
+          debugPrint("network_page EVENTO con data non Map e non String");
         }
       },
       onError: (dynamic errore) {
@@ -113,7 +112,7 @@ class _ScanPageState extends State<ScanPage> {
 
   /// Centralizza la risposta agli stati generati dal BleMeshManager nativo
   void _aggiornaStatoDallaStringaNativa(String stato) {
-    debugPrint("Stato GATT ricevuto: $stato");
+    debugPrint("STATO BleMeshManager ricevuto: $stato");
     setState(() {
       switch (stato) {
         case "CONNESSIONE_IN_CORSO":
@@ -129,7 +128,7 @@ class _ScanPageState extends State<ScanPage> {
            _statusMessage = "Connessione GATT Pronta!\nAvvio del provisioning in corso...";
           // Il canale è pronto! Ora possiamo svegliare la libreria Mesh in sicurezza
           if (_currentProvisioningUuid != null && _currentProvisioningMac != null) {
-            platform.invokeMethod('startProvisioning', {
+            methodChannel.invokeMethod('startProvisioning', {
               'uuid': _currentProvisioningUuid,
               'macAddress': _currentProvisioningMac,
             }).then((risultato) {

@@ -79,13 +79,14 @@ class MeshGattManager(
 
         setNotificationCallback(dataOutCharacteristic).with { _, data ->
             val bytes = data.value
-            val mtu = 247
+            val mtu = 33
             if (bytes != null) {
-                println("_DBG_KT initialize() setNotificationCallback(). data.size: ${bytes.size}, MTU attuale: $mtu")
+                println("_DBG_KT NotificationCallback(). data.size: ${bytes.size}, MTU attuale: $mtu")
                 // Invia le notifiche GATT in entrata direttamente all'API Mesh
                 try {
                     // Proviamo ad alimentare la rete passando la MTU dinamica reale negoziata dal modulo BLE
                     meshManagerApi.handleNotifications(mtu, bytes)
+                    
                 } catch (e: Exception) {
                     println("_DBG_KT initialize() Errore durante l'iniezione delle notifiche: ${e.message}")
                 }

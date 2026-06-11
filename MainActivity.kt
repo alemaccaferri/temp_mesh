@@ -40,7 +40,7 @@ import no.nordicsemi.android.mesh.MeshNetwork
 import no.nordicsemi.android.mesh.provisionerstates.ProvisioningCapabilities
 import no.nordicsemi.android.mesh.provisionerstates.UnprovisionedMeshNode
 import no.nordicsemi.android.mesh.provisionerstates.ProvisioningState
-
+//import no.nordicsemi.android.mesh.MeshProvisioningHandler
 import no.nordicsemi.android.mesh.transport.ProvisionedMeshNode
 import no.nordicsemi.android.mesh.transport.ControlMessage
 import no.nordicsemi.android.mesh.transport.MeshMessage
@@ -90,8 +90,6 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         
-        
-
         // Inizializza la libreria Java passando il contesto dell'applicazione Android
         meshManagerApi = MeshManagerApi(applicationContext)
 
@@ -225,42 +223,8 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
                     } else {
                         result.error("FILE_EMPTY", "Il file trovato è vuoto", null)
                     }
-
                 }
-
-               "startProvisioning" -> {
-                    val uuidStr = call.argument<String>("uuid")
-                    val macAddress = call.argument<String>("macAddress")
-                    
-                    // CORREZIONE 1: Cerchiamo nella mappa usando il macAddress (o l'uuidStr, in base a come lo salvi nel ScanCallback)
-                    // Se nel tuo ScanCallback fai unprovisionedNodesMap[result.device.address] = ..., allora qui serve macAddress.
-                    val nodeToProvision = unprovisionedNodesMap[macAddress] ?: unprovisionedNodesMap[uuidStr]
-
-                    if (nodeToProvision != null) {
-                        try {
-                            // Pulizia e formattazione dell'UUID (aggiunge i trattini se Flutter lo invia come stringa compatta)
-                            val formattedUuid = if (uuidStr != null && !uuidStr.contains("-") && uuidStr.length == 32) {
-                                uuidStr.replaceFirst("(\\w{8})(\\w{4})(\\w{4})(\\w{4})(\\w{12})".toRegex(), "$1-$2-$3-$4-$5")
-                            } else {
-                                uuidStr
-                            }
-                            
-                            val uuidObj = UUID.fromString(formattedUuid)
-                                                      
-
-                            // Invia l'invito Mesh GATT (Attention timer standard di 5 secondi)
-                            // Ora che viene chiamato dopo "DISPOSITIVO_PRONTO_MESH", il BleMeshManager scriverà subito sul GATT
-                            meshManagerApi.identifyNode(uuidObj, 5)
-                            
-                            result.success("Invito di identificazione inviato al nodo con successo.")
-                        } catch (e: Exception) {
-                            result.error("PROVISIONING_ERROR", "Errore identificazione: ${e.message}", null)
-                        }
-                    } else {
-                        result.error("NODE_NOT_FOUND", "Nodo non trovato nella mappa nativa. Verificare chiave di scansione.", null)
-                    }
-                }
-
+             
                 "connectToMeshNode" -> { // <--- NUOVO METODO PER FLUTTER
                     val macAddress = call.argument<String>("macAddress")
                     if (macAddress != null) {
@@ -298,7 +262,43 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
                 "stopScan" -> {
                     stopMeshScan()
                     result.success("Scansione interrotta")
-                } else -> {
+                } 
+                
+                "startProvisioning" -> {
+                    val uuidStr = call.argument<String>("uuid")
+                    val macAddress = call.argument<String>("macAddress")
+                    
+                    // CORREZIONE 1: Cerchiamo nella mappa usando il macAddress (o l'uuidStr, in base a come lo salvi nel ScanCallback)
+                    // Se nel tuo ScanCallback fai unprovisionedNodesMap[result.device.address] = ..., allora qui serve macAddress.
+                    val nodeToProvision = unprovisionedNodesMap[macAddress] ?: unprovisionedNodesMap[uuidStr]
+
+                    if (nodeToProvision != null) {
+                        try {
+                            // Pulizia e formattazione dell'UUID (aggiunge i trattini se Flutter lo invia come stringa compatta)
+                            val formattedUuid = if (uuidStr != null && !uuidStr.contains("-") && uuidStr.length == 32) {
+                                uuidStr.replaceFirst("(\\w{8})(\\w{4})(\\w{4})(\\w{4})(\\w{12})".toRegex(), "$1-$2-$3-$4-$5")
+                            } else {
+                                uuidStr
+                            }
+                            
+                            val uuidObj = UUID.fromString(formattedUuid)
+                                                      
+
+                            // Invia l'invito Mesh GATT (Attention timer standard di 5 secondi)
+                            // Ora che viene chiamato dopo "DISPOSITIVO_PRONTO_MESH", il BleMeshManager scriverà subito sul GATT
+                            meshManagerApi.identifyNode(uuidObj, 5)
+                            
+                            result.success("Invito di identificazione inviato al nodo con successo.")
+                        } catch (e: Exception) {
+                            result.error("PROVISIONING_ERROR", "Errore identificazione: ${e.message}", null)
+                        }
+                    } else {
+                        result.error("NODE_NOT_FOUND", "Nodo non trovato nella mappa nativa. Verificare chiave di scansione.", null)
+                    }
+                }
+
+                else -> {
+                    println("MainActivity.kt: MethodChannel: ERROR: Azione sconosciuta: ${call.method}")
                     result.notImplemented()
                 }
             }
@@ -399,12 +399,12 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
 
      override fun getMtu(): Int {
 
-        var mtu = 70 
+        var mtu = 247
 
         if (::meshGattManager.isInitialized) {
-            mtu = 70
+            mtu = 33
         } else {
-            mtu = 23
+            mtu = 33
         }
 
         println("_DBG_KT getMtu() mtu: ${mtu}")
@@ -424,11 +424,15 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
 
         // Aggiungiamo un controllo di sicurezza per essere sicuri che la variabile sia pronta
         if (::meshGattManager.isInitialized) {
+           
+            val pduHex = pdu.joinToString("") { String.format("%02x", it) }
+            println("_DBG_KT sendProvisioningPdu() Generata risposta di ${pdu.size} byte: 0x$pduHex")
+           
             // Eseguiamo la scrittura sul thread corretto per evitare blocchi asincroni
-            runOnUiThread {
-                println("_DBG_KT sendProvisioningPdu() Forzo l'invio della PDU al MeshGattManager...")
+            //runOnUiThread {
+                //println("_DBG_KT sendProvisioningPdu() Forzo l'invio della PDU al MeshGattManager...")
                 meshGattManager.sendMeshPdu(pdu)
-            }
+            //}
         } else {
             println("_DBG_KT sendProvisioningPdu() ERRORE CRITICO: meshGattManager non è ancora inizializzato!")
         }
@@ -441,7 +445,6 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
     
     override fun onTransactionFailed(dst: Int, hasIncompleteTimerExpired: Boolean) {
         println("_DBG_KT onTransactionFailed()")
-
     }
     
     override fun onUnknownPduReceived(src: Int, accessPayload: ByteArray?) {
@@ -495,9 +498,21 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
            
             currentDevice = meshNode
             currentCapabilities = meshNode.provisioningCapabilities
-
+          
             val network = meshManagerApi.meshNetwork
             if (network != null) {
+                 
+                // val provisioningHandler = meshManagerApi.meshProvisioningHandler
+                // val configurator = provisioningHandler.provisioningConfigurator
+
+                // if (configurator != null) {
+                //     // SBLOCCO CRITTOGRAFICO: Forziamo l'algoritmo standard e disattiviamo OOB
+                //     configurator.setAlgorithm(no.nordicsemi.android.mesh.provisioning.Algorithm.FIPS_P256_ELLIPTIC_CURVE)
+                //     configurator.setPublicKeyMethod(no.nordicsemi.android.mesh.provisioning.PublicKeyMethod.NO_OOB_PUBLIC_KEY)
+                //     configurator.setAuthenticationMethod(no.nordicsemi.android.mesh.provisioning.AuthenticationMethod.NoAuthentication())
+                //     println("_DBG_KT Parametri di sicurezza agganciati con successo.")
+                // }
+
                 val provisioner = network.selectedProvisioner
                 if (provisioner != null) {
                     // Leggiamo quante funzionalità (elementi) ha il tuo prototipo
@@ -512,15 +527,7 @@ class MainActivity: FlutterActivity(), MeshManagerCallbacks,
                 }
             }
 
-            
-            // // Inizializza lo stato di provisioning nativo sull'API
-            // val provisioningHandler = meshManagerApi.getMeshProvisioningHandler()
-            // // Associa i callback di stato al gestore interno di Nordic
-            // // Nota: Se la tua classe MainActivity implementa MeshProvisioningStatusCallbacks, usa 'this'
-            // meshManagerApi.setMeshProvisioningStatusCallbacks(this)
-
-
-
+           // meshManagerApi.setProvisioningAuthentication("1234")
 
             // Diamo il via libera finale per inviare il pacchetto PROVISIONING_START
             try {
